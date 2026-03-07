@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["SmartFillSegmentationModule"]
+  },
+  "android": {
+    "modules": ["com.architram.modules.smartfillsegmentation.SmartFillSegmentationModule"]
+  }
+}

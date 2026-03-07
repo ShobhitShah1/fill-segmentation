@@ -1,0 +1,18 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.architram.modules.smartfillsegmentation'
+version = '0.1.1'
+
+android {
+  namespace "com.architram.modules.smartfillsegmentation"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.1"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}

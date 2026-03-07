@@ -1,0 +1,40 @@
+{
+  "name": "smart-fill-segmentation",
+  "version": "0.1.3",
+  "description": "Fill Segmentation",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "scripts": {
+    "build": "node ./scripts/module-build.mjs build",
+    "clean": "expo-module clean",
+    "lint": "expo-module lint",
+    "test": "expo-module test",
+    "prepare": "node ./scripts/module-build.mjs prepare",
+    "prepublishOnly": "expo-module prepublishOnly",
+    "expo-module": "expo-module"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "smart-fill-segmentation",
+    "SmartFillSegmentation"
+  ],
+  "repository": "https://github.com",
+  "bugs": {
+    "url": "https://github.com/issues"
+  },
+  "author": "Shobhit Shah <shobhit942003@mail.com> (https://github.com)",
+  "license": "MIT",
+  "homepage": "https://www.npmjs.com/package/smart-fill-segmentation",
+  "devDependencies": {
+    "@types/react": "~19.1.1",
+    "expo": "^55.0.5",
+    "expo-module-scripts": "^55.0.2",
+    "react-native": "0.82.1"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}
