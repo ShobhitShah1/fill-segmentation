@@ -1,5 +1,6 @@
 package com.architram.modules.smartfillsegmentation
 
+import androidx.annotation.Keep
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -16,6 +17,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+@Keep
 class SmartFillSegmentationModule : Module() {
 
   data class HorizontalRun(val startX: Int, val endXExclusive: Int)
@@ -751,3 +753,4 @@ class SmartFillSegmentationModule : Module() {
       .append(" Z ")
   }
 }
+

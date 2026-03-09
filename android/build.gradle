@@ -11,8 +11,10 @@ android {
   defaultConfig {
     versionCode 1
     versionName "0.1.1"
+    consumerProguardFiles "proguard-rules.pro"
   }
   lintOptions {
     abortOnError false
   }
 }
+
