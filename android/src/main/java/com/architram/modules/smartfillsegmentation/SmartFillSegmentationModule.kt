@@ -22,7 +22,14 @@ class SmartFillSegmentationModule : Module() {
 
   data class HorizontalRun(val startX: Int, val endXExclusive: Int)
   data class RegionRun(val regionId: Int, val startX: Int, val endXExclusive: Int)
-  data class RegionMetadata(var pixelCount: Int = 0, var touchesEdge: Boolean = false)
+  data class RegionMetadata(
+    var pixelCount: Int = 0,
+    var touchesEdge: Boolean = false,
+    var minX: Int = Int.MAX_VALUE,
+    var minY: Int = Int.MAX_VALUE,
+    var maxX: Int = Int.MIN_VALUE,
+    var maxY: Int = Int.MIN_VALUE,
+  )
   data class PreparedImage(
     val width: Int,
     val height: Int,
@@ -33,7 +40,7 @@ class SmartFillSegmentationModule : Module() {
     val regionTouchesEdge: Map<Int, Boolean>,
   )
 
-  private val preparedImages = LinkedHashMap<String, PreparedImage>()
+  private val preparedImages = LinkedHashMap<String, PreparedImage>(8, 0.75f, true)
 
   override fun definition() = ModuleDefinition {
     Name("SmartFillSegmentation")
@@ -72,21 +79,26 @@ class SmartFillSegmentationModule : Module() {
         }
 
         val bitmap = loadBitmap(imageUri) ?: throw Exception("Failed to load image at $imageUri")
+        try {
+          val width = bitmap.width
+          val height = bitmap.height
+          if (width <= 0 || height <= 0) {
+            return@withContext ""
+          }
 
-        val width = bitmap.width
-        val height = bitmap.height
-        if (width <= 0 || height <= 0) {
-          return@withContext ""
+          val x = startX.toInt().coerceIn(0, width - 1)
+          val y = startY.toInt().coerceIn(0, height - 1)
+
+          val pixels = IntArray(width * height)
+          bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+          val mask = buildConnectedMask(pixels, width, height, x, y, safeTolerance)
+          generateSvgPathFromMask(mask, width, height)
+        } finally {
+          if (!bitmap.isRecycled) {
+            bitmap.recycle()
+          }
         }
-
-        val x = startX.toInt().coerceIn(0, width - 1)
-        val y = startY.toInt().coerceIn(0, height - 1)
-
-        val pixels = IntArray(width * height)
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-        val mask = buildConnectedMask(pixels, width, height, x, y, safeTolerance)
-        generateSvgPathFromMask(mask, width, height)
       }
     }
   }
@@ -98,9 +110,15 @@ class SmartFillSegmentationModule : Module() {
     preparedImages[key]?.let { return it }
 
     val bitmap = loadBitmap(imageUri) ?: throw Exception("Failed to load image at $imageUri")
-    val prepared = buildPreparedImage(bitmap, tolerance)
-    cachePreparedImage(imageUri, tolerance, prepared)
-    return prepared
+    return try {
+      val prepared = buildPreparedImage(bitmap, tolerance)
+      cachePreparedImage(imageUri, tolerance, prepared)
+      prepared
+    } finally {
+      if (!bitmap.isRecycled) {
+        bitmap.recycle()
+      }
+    }
   }
 
   private fun cachePreparedImage(imageUri: String, tolerance: Int, prepared: PreparedImage) {
@@ -311,7 +329,12 @@ class SmartFillSegmentationModule : Module() {
     val pixels = IntArray(width * height)
     bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
-    var regionIds = IntArray(width * height)
+    val transparentLineArt = isTransparentLineArtImage(pixels)
+    val lookupExpansionIterations = 2
+    val renderExpansionIterations = lookupExpansionIterations +
+      computeAdditionalRenderExpansionIterations(width, height, transparentLineArt)
+
+    val baseRegionIds = IntArray(width * height)
     val regionMetadata = mutableMapOf<Int, RegionMetadata>()
     val queue: Queue<Int> = LinkedList()
     val inkThreshold = computeInkThreshold(tolerance)
@@ -323,7 +346,7 @@ class SmartFillSegmentationModule : Module() {
     val dy = intArrayOf(0, 0, -1, 1)
 
     for (index in pixels.indices) {
-      if (regionIds[index] != 0 || barrierMask[index]) {
+      if (baseRegionIds[index] != 0 || barrierMask[index]) {
         continue
       }
 
@@ -331,7 +354,7 @@ class SmartFillSegmentationModule : Module() {
       val metadata = RegionMetadata()
       regionMetadata[regionId] = metadata
 
-      regionIds[index] = regionId
+      baseRegionIds[index] = regionId
       queue.add(index)
 
       while (queue.isNotEmpty()) {
@@ -339,10 +362,7 @@ class SmartFillSegmentationModule : Module() {
         val x = currentIndex % width
         val y = currentIndex / width
 
-        metadata.pixelCount += 1
-        if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {
-          metadata.touchesEdge = true
-        }
+        trackRegionPixel(metadata, x, y, width, height)
 
         for (direction in 0..3) {
           val nextX = x + dx[direction]
@@ -352,45 +372,41 @@ class SmartFillSegmentationModule : Module() {
           }
 
           val nextIndex = nextY * width + nextX
-          if (regionIds[nextIndex] != 0 || barrierMask[nextIndex]) {
+          if (baseRegionIds[nextIndex] != 0 || barrierMask[nextIndex]) {
             continue
           }
 
-          regionIds[nextIndex] = regionId
+          baseRegionIds[nextIndex] = regionId
           queue.add(nextIndex)
         }
       }
     }
 
-    val expandedRegionIds = expandRegionsIntoBarrierPixels(
-      regionIds = regionIds,
+    val lookupRegionIds = expandRegionsIntoBarrierPixels(
+      regionIds = baseRegionIds,
       barrierMask = barrierMask,
       width = width,
       height = height,
-      iterations = 2,
+      iterations = lookupExpansionIterations,
     )
 
-    for (index in regionIds.indices) {
-      val originalRegionId = regionIds[index]
-      val expandedRegionId = expandedRegionIds[index]
+    for (index in baseRegionIds.indices) {
+      val originalRegionId = baseRegionIds[index]
+      val expandedRegionId = lookupRegionIds[index]
       if (expandedRegionId <= 0 || expandedRegionId == originalRegionId) {
         continue
       }
 
       val metadata = regionMetadata[expandedRegionId] ?: continue
-      metadata.pixelCount += 1
-
       val x = index % width
       val y = index / width
-      if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {
-        metadata.touchesEdge = true
-      }
+      trackRegionPixel(metadata, x, y, width, height)
     }
 
-    regionIds = expandedRegionIds
-
     val eligibleRegionIds = regionMetadata
-      .filterValues { metadata -> metadata.pixelCount >= minimumRegionSize }
+      .filterValues { metadata ->
+        shouldKeepRegion(metadata, minimumRegionSize, max(width, height))
+      }
       .keys
       .toMutableSet()
 
@@ -402,9 +418,92 @@ class SmartFillSegmentationModule : Module() {
       }
     }
 
+    val renderRegionIds = if (renderExpansionIterations > lookupExpansionIterations) {
+      expandRegionsIntoBarrierPixels(
+        regionIds = lookupRegionIds,
+        barrierMask = barrierMask,
+        width = width,
+        height = height,
+        iterations = renderExpansionIterations - lookupExpansionIterations,
+      )
+    } else {
+      lookupRegionIds
+    }
+
+    val lookupRows = buildLookupRows(
+      regionIds = lookupRegionIds,
+      width = width,
+      height = height,
+      eligibleRegionIds = eligibleRegionIds,
+    )
+
+    val regionPaths = buildRegionPaths(
+      regionIds = renderRegionIds,
+      width = width,
+      height = height,
+      eligibleRegionIds = eligibleRegionIds,
+    )
+
+    val regionPixelCounts = mutableMapOf<Int, Int>()
+    val regionTouchesEdge = mutableMapOf<Int, Boolean>()
+    for ((regionId, metadata) in regionMetadata) {
+      if (!regionPaths.containsKey(regionId)) {
+        continue
+      }
+      regionPixelCounts[regionId] = metadata.pixelCount
+      regionTouchesEdge[regionId] = metadata.touchesEdge
+    }
+
+    return PreparedImage(
+      width = width,
+      height = height,
+      regionIds = lookupRegionIds,
+      regionPaths = regionPaths,
+      rowRuns = lookupRows,
+      regionPixelCounts = regionPixelCounts,
+      regionTouchesEdge = regionTouchesEdge,
+    )
+  }
+
+  private fun buildLookupRows(
+    regionIds: IntArray,
+    width: Int,
+    height: Int,
+    eligibleRegionIds: Set<Int>,
+  ): List<List<Int>> {
+    val rows = MutableList(height) { mutableListOf<Int>() }
+
+    for (y in 0 until height) {
+      var x = 0
+      while (x < width) {
+        val regionId = regionIds[y * width + x]
+        if (regionId <= 0 || regionId !in eligibleRegionIds) {
+          x += 1
+          continue
+        }
+
+        val startX = x
+        while (x < width && regionIds[y * width + x] == regionId) {
+          x += 1
+        }
+
+        rows[y].add(startX)
+        rows[y].add(x)
+        rows[y].add(regionId)
+      }
+    }
+
+    return rows
+  }
+
+  private fun buildRegionPaths(
+    regionIds: IntArray,
+    width: Int,
+    height: Int,
+    eligibleRegionIds: Set<Int>,
+  ): Map<Int, String> {
     val pathBuilders = mutableMapOf<Int, StringBuilder>()
     val activeRuns = linkedMapOf<RegionRun, Int>()
-    val lookupRows = MutableList(height) { mutableListOf<Int>() }
 
     for (y in 0 until height) {
       val rowRuns = mutableListOf<RegionRun>()
@@ -422,9 +521,6 @@ class SmartFillSegmentationModule : Module() {
         }
 
         rowRuns.add(RegionRun(regionId, startX, x))
-        lookupRows[y].add(startX)
-        lookupRows[y].add(x)
-        lookupRows[y].add(regionId)
       }
 
       val rowRunSet = rowRuns.toSet()
@@ -460,29 +556,86 @@ class SmartFillSegmentationModule : Module() {
       )
     }
 
-    val regionPaths = pathBuilders
+    return pathBuilders
       .mapValues { (_, builder) -> builder.toString().trim() }
       .filterValues { it.isNotEmpty() }
+  }
 
-    val regionPixelCounts = mutableMapOf<Int, Int>()
-    val regionTouchesEdge = mutableMapOf<Int, Boolean>()
-    for ((regionId, metadata) in regionMetadata) {
-      if (!regionPaths.containsKey(regionId)) {
-        continue
-      }
-      regionPixelCounts[regionId] = metadata.pixelCount
-      regionTouchesEdge[regionId] = metadata.touchesEdge
+  private fun trackRegionPixel(
+    metadata: RegionMetadata,
+    x: Int,
+    y: Int,
+    width: Int,
+    height: Int,
+  ) {
+    metadata.pixelCount += 1
+    metadata.minX = min(metadata.minX, x)
+    metadata.minY = min(metadata.minY, y)
+    metadata.maxX = max(metadata.maxX, x)
+    metadata.maxY = max(metadata.maxY, y)
+
+    if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {
+      metadata.touchesEdge = true
+    }
+  }
+
+  private fun shouldKeepRegion(
+    metadata: RegionMetadata,
+    minimumRegionSize: Int,
+    maxDimension: Int,
+  ): Boolean {
+    if (metadata.pixelCount >= minimumRegionSize) {
+      return true
     }
 
-    return PreparedImage(
-      width = width,
-      height = height,
-      regionIds = regionIds,
-      regionPaths = regionPaths,
-      rowRuns = lookupRows,
-      regionPixelCounts = regionPixelCounts,
-      regionTouchesEdge = regionTouchesEdge,
-    )
+    val regionWidth = if (metadata.maxX >= metadata.minX) metadata.maxX - metadata.minX + 1 else 0
+    val regionHeight = if (metadata.maxY >= metadata.minY) metadata.maxY - metadata.minY + 1 else 0
+    val thinThickness = (maxDimension / 220).coerceIn(2, 6)
+    val thinMinimumPixels = (maxDimension / 320).coerceIn(2, 10)
+    val longestSide = max(regionWidth, regionHeight)
+    val shortestSide = min(regionWidth, regionHeight)
+
+    return metadata.pixelCount >= thinMinimumPixels &&
+      shortestSide in 1..thinThickness &&
+      longestSide >= thinThickness * 2
+  }
+
+  private fun computeAdditionalRenderExpansionIterations(
+    width: Int,
+    height: Int,
+    transparentLineArt: Boolean,
+  ): Int {
+    if (!transparentLineArt) {
+      return 0
+    }
+
+    return when {
+      max(width, height) >= 1200 -> 3
+      else -> 2
+    }
+  }
+
+  private fun isTransparentLineArtImage(pixels: IntArray): Boolean {
+    var transparentPixels = 0
+    var visiblePixels = 0
+    var darkVisiblePixels = 0
+
+    for (pixel in pixels) {
+      val alpha = Color.alpha(pixel)
+      if (alpha <= 18) {
+        transparentPixels += 1
+        continue
+      }
+
+      visiblePixels += 1
+      if (luminance(pixel) <= 48) {
+        darkVisiblePixels += 1
+      }
+    }
+
+    return transparentPixels * 5 >= pixels.size &&
+      visiblePixels > 0 &&
+      darkVisiblePixels * 2 >= visiblePixels
   }
 
   private fun computeInkThreshold(tolerance: Int): Int {
@@ -753,4 +906,3 @@ class SmartFillSegmentationModule : Module() {
       .append(" Z ")
   }
 }
-

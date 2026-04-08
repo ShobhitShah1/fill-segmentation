@@ -4,11 +4,17 @@ import {
   SmartFillPreparedLookup,
   SmartFillPreparationConfig,
 } from "./SmartFillSegmentation.types";
+import {
+  getSmartFillRegionIdAt,
+  resolveSmartFillRegionPath,
+} from "./resolve-smart-fill-region";
 
 export {
   SmartFillConfig,
   SmartFillPreparedLookup,
   SmartFillPreparationConfig,
+  getSmartFillRegionIdAt,
+  resolveSmartFillRegionPath,
 };
 
 export async function prepareSmartFillImage(

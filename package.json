@@ -1,6 +1,6 @@
 {
   "name": "smart-fill-segmentation",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Fill Segmentation",
   "main": "build/index.js",
   "types": "build/index.d.ts",

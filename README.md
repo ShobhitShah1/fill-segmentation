@@ -12,6 +12,7 @@ Most paint tools leak outside boundaries on mobile images. This package gives yo
 - SVG paths per detected region
 - Real-time JS lookup for smooth interaction
 - Better edge handling for thin outlines and anti-aliased borders
+- Android preprocessing backed by OpenCV for stronger local line detection
 
 ## Install
 
@@ -29,6 +30,8 @@ yarn expo run:ios
 ```
 
 Do not test in Expo Go.
+
+On Android, the native module now pulls in the official OpenCV package during the Gradle build.
 
 ## 3-Minute Quick Start
 
